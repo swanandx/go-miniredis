@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/binary"
 	"fmt"
-	"io"
 	"log"
 	"net"
 )
@@ -44,16 +43,25 @@ func query(conn net.Conn, text string) error {
 
 	binary.LittleEndian.PutUint32(wbuf, msg_len)
 	copy(wbuf[4:], text)
-	err := write_all(conn, wbuf, int(4+msg_len))
+	written, err := conn.Write(wbuf[:4+msg_len])
 
 	if err != nil {
 		return err
 	}
 
+	if written < int(msg_len) {
+		return fmt.Errorf("Unable to write full message, wrote %v/%v", written, msg_len)
+	}
+
 	rbuf := make([]byte, 4+k_max_msg+1)
-	err = read_full(conn, rbuf, 4)
+	read, err := conn.Read(rbuf)
+
 	if err != nil {
 		return err
+	}
+
+	if read < 4 {
+		return fmt.Errorf("Insufficient bytes, expected at least 4, got %v", read)
 	}
 
 	msg_len = binary.LittleEndian.Uint32(rbuf[:4])
@@ -62,10 +70,8 @@ func query(conn net.Conn, text string) error {
 		return fmt.Errorf("Message too long!")
 	}
 
-	// reply body
-	err = read_full(conn, rbuf[4:], int(msg_len))
-	if err != nil {
-		return err
+	if read < int(msg_len)+4 {
+		return fmt.Errorf("Unable to read full message, read %v/%v", read, msg_len)
 	}
 
 	// do something
@@ -73,43 +79,5 @@ func query(conn net.Conn, text string) error {
 
 	fmt.Println("server says: ", string(rbuf[4:]))
 
-	return nil
-}
-
-func read_full(c net.Conn, buf []byte, n int) error {
-	reader := io.LimitReader(c, int64(n))
-	pos := 0
-	for n > 0 {
-		rv, err := reader.Read(buf[pos:])
-		if err != nil {
-			return err
-		}
-
-		if rv > n {
-			panic("we have limited the reader, we should never reach here")
-		}
-
-		n -= rv
-		pos += rv
-	}
-
-	return nil
-}
-
-func write_all(c net.Conn, buf []byte, n int) error {
-	pos := 0
-	for n > 0 {
-		rv, err := c.Write(buf[pos:n])
-		if err != nil {
-			return err
-		}
-
-		if rv > n {
-			panic("should never happen right?")
-		}
-
-		n -= rv
-		pos += rv
-	}
 	return nil
 }
