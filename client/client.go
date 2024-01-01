@@ -4,36 +4,57 @@ import (
 	"encoding/binary"
 	"fmt"
 	"log"
-	"net"
+	"syscall"
 )
 
-func main() {
-	conn, err := net.Dial("tcp", ":1234")
+func closeit(fd int) {
+	// shall we use this instead?
+	// syscall.CloseOnExec(fd)
+	err := syscall.Close(fd)
 	if err != nil {
-		log.Fatal("Failed to connect: ", err)
+		log.Fatal("Failed to close the fd: ", err)
+	}
+}
+
+func main() {
+	conn, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_STREAM, 0)
+	if err != nil {
+		log.Fatal("Failed to open socket: ", err)
 	}
 
-	defer conn.Close()
+	defer closeit(conn)
+
+	addr := syscall.SockaddrInet4{
+		Port: 1234,
+	}
+
+	err = syscall.Connect(conn, &addr)
+	if err != nil {
+		log.Println("failed to connect: ", err)
+	}
 
 	err = query(conn, "hello1")
 	if err != nil {
-		log.Fatal("query failed: ", err)
+		log.Println("query failed: ", err)
+		return
 	}
 
 	err = query(conn, "hello2")
 	if err != nil {
-		log.Fatal("query failed: ", err)
+		log.Println("query failed: ", err)
+		return
 	}
 
 	err = query(conn, "hello3")
 	if err != nil {
-		log.Fatal("query failed: ", err)
+		log.Println("query failed: ", err)
+		return
 	}
 }
 
 var k_max_msg uint32 = 4096
 
-func query(conn net.Conn, text string) error {
+func query(conn int, text string) error {
 	msg_len := uint32(len(text))
 	if msg_len > k_max_msg {
 		return fmt.Errorf("Message too long")
@@ -43,7 +64,7 @@ func query(conn net.Conn, text string) error {
 
 	binary.LittleEndian.PutUint32(wbuf, msg_len)
 	copy(wbuf[4:], text)
-	written, err := conn.Write(wbuf[:4+msg_len])
+	written, err := syscall.Write(conn, wbuf[:4+msg_len])
 
 	if err != nil {
 		return err
@@ -54,10 +75,14 @@ func query(conn net.Conn, text string) error {
 	}
 
 	rbuf := make([]byte, 4+k_max_msg+1)
-	read, err := conn.Read(rbuf)
+	read, err := syscall.Read(conn, rbuf)
 
 	if err != nil {
 		return err
+	}
+
+	if read == 0 {
+		return fmt.Errorf("EOF")
 	}
 
 	if read < 4 {

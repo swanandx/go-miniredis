@@ -4,24 +4,51 @@ import (
 	"encoding/binary"
 	"fmt"
 	"log"
-	"net"
+	"syscall"
 )
 
-func main() {
-	socket, err := net.Listen("tcp", ":1234")
-
+func closeit(fd int) {
+	// shall we use this instead?
+	// syscall.CloseOnExec(fd)
+	err := syscall.Close(fd)
 	if err != nil {
-		log.Fatal("Failed to open socket: ", err)
+		log.Fatal("Failed to close the fd: ", err)
 	}
-	defer socket.Close()
+}
+
+func main() {
+	fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_STREAM, 0)
+	if err != nil {
+		log.Println("Failed to open socket: ", err)
+		return
+	}
+
+	defer closeit(fd)
+
+	syscall.SetsockoptInt(fd, syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
+
+	addr := syscall.SockaddrInet4{
+		Port: 1234,
+	}
+
+	err = syscall.Bind(fd, &addr)
+	if err != nil {
+		log.Println("Failed to bind socket: ", err)
+		return
+	}
+
+	err = syscall.Listen(fd, syscall.SOMAXCONN)
+	if err != nil {
+		log.Println("Failed to bind socket: ", err)
+		return
+	}
 
 	for {
-		conn, err := socket.Accept()
+		conn, _, err := syscall.Accept(fd)
 		if err != nil {
 			log.Println("Failed to accept connection: ", err)
 			continue
 		}
-		defer conn.Close()
 
 		for {
 			e := one_request(conn)
@@ -30,18 +57,24 @@ func main() {
 				break
 			}
 		}
+
+		closeit(conn)
 	}
 }
 
 var k_max_msg uint32 = 4096
 
-func one_request(conn net.Conn) error {
+func one_request(conn int) error {
 	// 4 bytes header
 	rbuf := make([]byte, 4+k_max_msg+1)
-	read, err := conn.Read(rbuf)
+	read, err := syscall.Read(conn, rbuf)
 
 	if err != nil {
 		return err
+	}
+
+	if read == 0 {
+		return fmt.Errorf("EOF")
 	}
 
 	if read < 4 {
@@ -69,7 +102,7 @@ func one_request(conn net.Conn) error {
 	binary.LittleEndian.PutUint32(wbuf, msg_len)
 	copy(wbuf[4:], reply)
 
-	written, err := conn.Write(wbuf[:4+msg_len])
+	written, err := syscall.Write(conn, wbuf[:4+msg_len])
 
 	if err != nil {
 		return err
